@@ -1,4 +1,6 @@
 from blessed import Terminal
+import platform
+import getpass
 import datetime
 import time
 import signal
@@ -45,25 +47,75 @@ class Node:
     def __init__(self, term, config):
         self.term = term
         self.config = config
-        self._colors = config.get('colors', get_colors())
-        self._color = term.color_rgb(*random.choice(self._colors[1:-1]))
-        self._char = random.choice(config.get('charset', CHARSET["default"]))
+        self._colors = config.get("colors", get_colors())
+        self._color = None
+        self._char = random.choice(config.get("charset", CHARSET["default"]))
+        self._lifetime = config.get("lifetime", None)
+        self._age = 0
+
+    @property
+    def color(self):
+        if not self._color:
+            self._color = self.term.color_rgb(*random.choice(self._colors[1:-1]))
+        return self._color
 
     def __str__(self):
-        return self._color + self._char
+        if self._lifetime is not None and self._lifetime < self._age:
+            return " "
+
+        self._age += 1
+        return self.color + self._char
+
+
+class FadingNode(Node):
+
+    def __init__(self, term, config):
+        super().__init__(term, config)
+        self._target_color = random.randint(1, len(self._colors) - 2)
+        usewhites = self.config.get("usewhites", None)
+        self._current_color = len(self._colors) - (1 if usewhites else 2)
+
+    @property
+    def color(self):
+        cidx = self._current_color
+        if self._target_color < self._current_color:
+            self._current_color -= 1
+
+        if self._lifetime is not None and self._lifetime < self._age + cidx:
+            cidx = max(0, self._lifetime - self._age)
+
+        return self.term.color_rgb(*self._colors[cidx])
 
 
 class Spawner:
-    
+
     def __init__(self, height, term, config):
         self.height = height
         self.term = term
         self.config = config
+        self.nodecls = Node
+
+        self.nodecfg = self.config.copy()
+        self.nodecfg["lifetime"] = self.get_lifetime()
+
+        usewhites = self.config.get("usewhites", None)
+        if usewhites in [True, False]:
+            self.nodecfg["usewhites"] = usewhites
+        else:
+            self.nodecfg["usewhites"] = random.choice([True, False])
 
         self.pos = 0
 
+    def get_lifetime(self):
+        lifetime = self.config.get("lifetime", None)
+
+        if lifetime is None:
+            lifetime = int(self.height * (.5 + random.random()))
+
+        return lifetime
+
     def next_node(self):
-        return Node(self.term, self.config)
+        return self.nodecls(self.term, self.nodecfg)
 
     def step(self, column):
         column[self.pos] = self.next_node()
@@ -73,6 +125,19 @@ class Spawner:
             return None
 
         return self
+
+
+class FadingSpawner(Spawner):
+
+    def __init__(self, height, term, config):
+        super().__init__(height, term, config)
+        self.nodecls = FadingNode
+
+
+class Eraser(Spawner):
+
+    def next_node(self):
+        return " "
 
 
 class Column:
@@ -85,6 +150,7 @@ class Column:
         self._nodes = []
         self._clear()
         self._spawner = None
+        self._spawner_classes = [FadingSpawner]  # Spawner, FadingSpawner
 
     def _clear(self):
         self._nodes = [" " for _ in range(self.height)]
@@ -95,12 +161,16 @@ class Column:
     def __setitem__(self, y, node):
         self._nodes[y] = node
 
+    def get_spawner(self):
+        return random.choice(self._spawner_classes)
+
     def spawn(self, probability=None):
         if probability is None:
-            probability = self.config.get('spawn_probability', .01)
+            probability = self.config.get("spawn_probability", .01)
 
         if random.random() < probability:
-            return Spawner(self.height, self.term, self.config)
+            spawnercls = self.get_spawner()
+            return spawnercls(self.height, self.term, self.config)
         else:
             return None
 
@@ -163,7 +233,7 @@ class Screen:
         return self._columns[x]
 
     def __str__(self):
-        return '\n'.join([''.join([str(node) for node in line]) for line in self.lines])
+        return "\n".join(["".join([str(node) for node in line]) for line in self.lines])
 
 
 SCREEN = Screen(20, 20)
@@ -171,6 +241,10 @@ SCREEN = Screen(20, 20)
 
 def get_colors(palette="default"):
     return PALETTE[palette]
+
+
+def get_status_message():
+    return getpass.getuser() + "@" + platform.node()
 
 
 def status(term, colors, message):
@@ -204,6 +278,7 @@ def main():
     config["colors"] = colors
     SCREEN.configure(term.width, term.height - 1, term, config)
     key = None
+    status_message = get_status_message()
 
     signal.signal(signal.SIGWINCH, resize_handler(term))
 
@@ -212,7 +287,7 @@ def main():
             while key is None or key.code != term.KEY_ESCAPE:
                 if SCREEN.step():
                     print(term.move_xy(0, 0) + str(SCREEN), end="")
-                status(term, colors, "hello bello")
+                status(term, colors, status_message)
                 key = term.inkey(timeout=UPDATE_TIME, esc_delay=UPDATE_TIME / 10)
                 time.sleep(UPDATE_TIME)
         except KeyboardInterrupt:
