@@ -1,5 +1,6 @@
 from blessed import Terminal
 import datetime
+import time
 import signal
 import random
 
@@ -34,72 +35,138 @@ PALETTE["default"] = PALETTE["green"]
 SPEED = .1
 UPDATE_TIME = SPEED / 10
 
-NODES = {
-    0: []
-}
 
+class Configuration(dict):
+    pass
+    
 
 class Node:
+    
+    def __init__(self, term, config):
+        self.term = term
+        self.config = config
+        self._colors = config.get('colors', get_colors())
+        self._color = term.color_rgb(*random.choice(self._colors[1:-1]))
+        self._char = random.choice(config.get('charset', CHARSET["default"]))
 
-    def __init__(self, column=0, speed=SPEED, white=None, charset=CHARSET["default"], colors=PALETTE["default"]):
-        self.type = "node"
-        self.x = column
-        self.y = 0
-        self.white = white if white is not None else random.choice([True, False])
-        self.last_char = None
-        self.last_step = 0
-        self.speed = speed
-        self.charset = charset
-        self.colors = colors
+    def __str__(self):
+        return self._color + self._char
 
-    @property
-    def next_char(self):
-        char = random.choice(self.charset)
-        self.last_char = char
 
-        return char
+class Spawner:
+    
+    def __init__(self, height, term, config):
+        self.height = height
+        self.term = term
+        self.config = config
 
-    def random_color(self):
-        return random.choice(self.colors[1:-1])  # omit black and white
+        self.pos = 0
 
-    def need_step(self, time):
-        return self.last_step + self.speed < time
+    def next_node(self):
+        return Node(self.term, self.config)
 
-    def step(self, term, now):
-        self.last_step = now
-        if self.y > term.height - (1 if self.white else 2):
-            return False
-        if self.white:
-            movement = ""
-            if self.last_char:
-                movement += term.move_xy(self.x, self.y - 1) + term.color_rgb(*self.random_color()) + self.last_char
-            if self.y < term.height - 1:
-                movement += term.move_xy(self.x, self.y) + term.color_rgb(*self.colors[-1]) + self.next_char
+    def step(self, column):
+        column[self.pos] = self.next_node()
+
+        self.pos += 1
+        if self.pos >= self.height:
+            return None
+
+        return self
+
+
+class Column:
+
+    def __init__(self, height, term, config):
+        self.height = height
+        self.term = term
+        self.config = config
+
+        self._nodes = []
+        self._clear()
+        self._spawner = None
+
+    def _clear(self):
+        self._nodes = [" " for _ in range(self.height)]
+
+    def __getitem__(self, y):
+        return self._nodes[y]
+
+    def __setitem__(self, y, node):
+        self._nodes[y] = node
+
+    def spawn(self, probability=None):
+        if probability is None:
+            probability = self.config.get('spawn_probability', .01)
+
+        if random.random() < probability:
+            return Spawner(self.height, self.term, self.config)
         else:
-            movement = term.move_xy(self.x, self.y) + term.color_rgb(*self.random_color()) + self.next_char
+            return None
 
-        self.y += 1
-        return movement
+    def step(self):
+        if self._spawner:
+            self._spawner = self._spawner.step(self)
+        else:
+            self._spawner = self.spawn()
 
 
-class Eraser(Node):
+class Screen:
 
-    def __init__(self, column=0, speed=SPEED):
-        super().__init__(column, speed, False, " ")
+    def __init__(self, width=80, height=24, term=None, config=None):
+        self.term = None
+        self.config = {}
+        self.configure(width, height, term, config)
 
-        self.type = "eraser"
-        self.last_char = " "
+    def configure(self, width=None, height=None, term=None, config=None):
+        if term is not None:
+            self.term = term
+        if width is not None:
+            self.width = width
+        if height is not None:
+            self.height = height
+        if config is not None:
+            self.config = config
+
+        self.step_time = SPEED  # TODO
+        self._last_step = 0
+        self._columns = self._init_columns()
+
+    def _init_columns(self):
+        return [Column(self.height, self.term, self.config) for _ in range(self.width)]
 
     @property
-    def next_char(self):
-        return " "
+    def columns(self):
+        return self._columns
 
-    def random_color(self):
-        return self.colors[0]
+    @property
+    def lines(self):
+        return [self.line(y) for y in range(self.height)]
+
+    def column(self, x):
+        return self._columns[x]
+
+    def line(self, y):
+        return [c[y] for c in self._columns]
+
+    def step(self):
+        now = time.time()
+        if self._last_step + self.step_time < now:
+            self._last_step = now
+            for column in self._columns:
+                column.step()
+            return True
+
+        return False
+
+    def __getitem__(self, x):
+        return self._columns[x]
+
+    def __str__(self):
+        return '\n'.join([''.join([str(node) for node in line]) for line in self.lines])
 
 
-# TODO
-NODES[0].append(Node())
+SCREEN = Screen(20, 20)
 
 
 def get_colors(palette="default"):
@@ -123,33 +190,19 @@ def status(term, colors, message):
         print(msg, end="")
 
 
-def step(term, colors, nodes):
-    now = datetime.datetime.now().timestamp()
-    for column, cnodes in nodes.items():
-        print(term.move_x(column), end="")
-        for node in cnodes:
-            if node.need_step(now):
-                # TODO
-                movement = node.step(term, now)
-                if movement:
-                    print(movement, end="")
-                else:
-                    if node.type == "node":
-                        cnodes.append(Eraser())
-                    else:
-                        cnodes.append(Node())
-                    cnodes.remove(node)
-
-
 def resize_handler(term):
     def on_resize(*_):
         print(term.clear)
+        SCREEN.configure(term.width, term.height - 1)
     return on_resize
 
 
 def main():
     term = Terminal()
     colors = get_colors()
+    config = Configuration()  # TODO
+    config["colors"] = colors
+    SCREEN.configure(term.width, term.height - 1, term, config)
     key = None
 
     signal.signal(signal.SIGWINCH, resize_handler(term))
@@ -157,8 +210,10 @@ def main():
     with term.fullscreen(), term.cbreak(), term.hidden_cursor():
         try:
             while key is None or key.code != term.KEY_ESCAPE:
-                step(term, colors, NODES)
+                if SCREEN.step():
+                    print(term.move_xy(0, 0) + str(SCREEN), end="")
                 status(term, colors, "hello bello")
                 key = term.inkey(timeout=UPDATE_TIME, esc_delay=UPDATE_TIME / 10)
+                time.sleep(UPDATE_TIME)
         except KeyboardInterrupt:
             pass
