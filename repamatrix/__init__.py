@@ -37,26 +37,107 @@ PALETTE["default"] = PALETTE["green"]
 SPEED = .1
 UPDATE_TIME = SPEED / 10
 
+OVERLAY = [
+    "     █████                                  ███ ",
+    "    ▒▒███                                  ▒▒▒  ",
+    "  ███████  █████ ████ █████ ████ ████████  ████ ",
+    " ███▒▒███ ▒▒███ ▒███ ▒▒███ ▒███ ▒▒███▒▒███▒▒███ ",
+    "▒███ ▒███  ▒███ ▒███  ▒███ ▒███  ▒███ ▒▒▒  ▒███ ",
+    "▒███ ▒███  ▒███ ▒███  ▒███ ▒███  ▒███      ▒███ ",
+    "▒▒████████ ▒▒███████  ▒▒████████ █████     █████",
+    " ▒▒▒▒▒▒▒▒   ▒▒▒▒▒███   ▒▒▒▒▒▒▒▒ ▒▒▒▒▒     ▒▒▒▒▒ ",
+    "            ███ ▒███                            ",
+    "           ▒▒██████                             ",
+    "            ▒▒▒▒▒▒                              ",
+]
+
+
+class Overlay:
+
+    def __init__(self, width, height, content):
+        self.width = width
+        self.height = height
+        self.content = content
+        self._cheight = len(content)
+        self._cwidth = len(content[0])
+
+    def __getitem__(self, x):
+        if self.width < self._cwidth or self.height < self._cheight:
+            return [" " for _ in range(self.width)]
+
+        top = int((self.height - self._cheight) / 2)
+        if top <= x < top + self._cheight:
+            before = int((self.width - self._cwidth) / 2)
+            after = self.width - before - self._cwidth
+            return [" " for _ in range(before)] + list(self.content[x - top]) + [" " for _ in range(after)]
+        else:
+            return [" " for _ in range(self.width)]
+
+
+class ColorOverlay(Overlay):
+
+    def __init__(self, width, height, content, term, color):
+        super().__init__(width, height, content)
+        self.term = term
+        self.color = color
+
+    def __getitem__(self, x):
+        line = super().__getitem__(x)
+        return [ch if ch == " " else Node(self.term, {"char": ch, "color": self.color}) for ch in line]
+
 
 class Configuration(dict):
     pass
-    
+
 
 class Node:
-    
+
+    def __init__(self, term, config):
+        self.term = term
+        self.config = config
+        self._color = config.get("color", None)
+        self._char = config.get("char", " ")
+
+    @property
+    def term_color(self):
+        if not self._color:
+            self._color = self.term.normal
+        return self.term.color_rgb(*self._color)
+
+    @property
+    def color(self):
+        if not self._color:
+            self._color = self.term.normal
+        return self._color
+
+    @property
+    def colored(self):
+        return self.term_color + self._char
+
+    def __str__(self):
+        return self._char
+
+
+class DynamicNode(Node):
+
     def __init__(self, term, config):
         self.term = term
         self.config = config
         self._colors = config.get("colors", get_colors())
         self._color = None
-        self._char = random.choice(config.get("charset", CHARSET["default"]))
+        self._charset = config.get("charset", CHARSET["default"])
+        self._char = random.choice(self._charset)
         self._lifetime = config.get("lifetime", None)
         self._age = 0
 
     @property
+    def term_color(self):
+        return self.term.color_rgb(*self.color)
+
+    @property
     def color(self):
         if not self._color:
-            self._color = self.term.color_rgb(*random.choice(self._colors[1:-1]))
+            self._color = random.choice(self._colors[1:-1])
         return self._color
 
     def __str__(self):
@@ -64,10 +145,10 @@ class Node:
             return " "
 
         self._age += 1
-        return self.color + self._char
+        return self._char
 
 
-class FadingNode(Node):
+class FadingNode(DynamicNode):
 
     def __init__(self, term, config):
         super().__init__(term, config)
@@ -84,7 +165,14 @@ class FadingNode(Node):
         if self._lifetime is not None and self._lifetime < self._age + cidx:
             cidx = max(0, self._lifetime - self._age)
 
-        return self.term.color_rgb(*self._colors[cidx])
+        return self._colors[cidx]
+
+
+class FadingFlasher(FadingNode):
+    def __str__(self):
+        if self._lifetime is not None and self._lifetime > self._age:
+            self._char = random.choice(self._charset)
+        return super().__str__()
 
 
 class Spawner:
@@ -93,7 +181,7 @@ class Spawner:
         self.height = height
         self.term = term
         self.config = config
-        self.nodecls = Node
+        self._nodecls = DynamicNode
 
         self.nodecfg = self.config.copy()
         self.nodecfg["lifetime"] = self.get_lifetime()
@@ -105,6 +193,10 @@ class Spawner:
             self.nodecfg["usewhites"] = random.choice([True, False])
 
         self.pos = 0
+
+    @property
+    def nodecls(self):
+        return self._nodecls
 
     def get_lifetime(self):
         lifetime = self.config.get("lifetime", None)
@@ -131,7 +223,17 @@ class FadingSpawner(Spawner):
 
     def __init__(self, height, term, config):
         super().__init__(height, term, config)
-        self.nodecls = FadingNode
+        self._nodecls = FadingNode
+
+
+class FadingFlasherSpawner(FadingSpawner):
+
+    @property
+    def nodecls(self):
+        if random.random() < .01:
+            return FadingFlasher
+        else:
+            return FadingNode
 
 
 class Eraser(Spawner):
@@ -150,7 +252,7 @@ class Column:
         self._nodes = []
         self._clear()
         self._spawner = None
-        self._spawner_classes = [FadingSpawner]  # Spawner, FadingSpawner
+        self._spawner_classes = [FadingSpawner, FadingFlasherSpawner]  # Spawner, FadingSpawner, FadingFlasherSpawner, Eraser
 
     def _clear(self):
         self._nodes = [" " for _ in range(self.height)]
@@ -200,10 +302,15 @@ class Screen:
 
         self.step_time = SPEED  # TODO
         self._last_step = 0
+        self._overlay = None
         self._columns = self._init_columns()
 
     def _init_columns(self):
         return [Column(self.height, self.term, self.config) for _ in range(self.width)]
+
+    @property
+    def colors(self):
+        return self.config.get("colors", PALETTE["default"])
 
     @property
     def columns(self):
@@ -229,11 +336,40 @@ class Screen:
 
         return False
 
+    def get_overlay_node(self, x, y):
+        return " "
+
     def __getitem__(self, x):
         return self._columns[x]
 
     def __str__(self):
-        return "\n".join(["".join([str(node) for node in line]) for line in self.lines])
+        image = []
+        for line in self.lines:
+            image.append("".join([getattr(node, "colored", str(node)) for node in line]))
+
+        if False:
+            for y in range(self.height):
+                line = []
+                for x, column in enumerate(self.columns):
+                    node = column[y]
+                    if self.overlay:
+                        overlaynode = self.overlay[y][x]
+                        overlaymode = self.config.get("overlaymode", "both")
+                        if str(overlaynode) == " " or str(node) == " ":
+                            char = getattr(node, "term_color", "") + str(node)
+                        elif overlaymode == "char":
+                            char = getattr(node, "term_color", self.term.normal) + str(overlaynode)
+                        elif overlaymode == "color":
+                            char = getattr(overlaynode, "term_color", "") + str(node)
+                        else:  # both
+                            char = getattr(overlaynode, "term_color", "") + str(overlaynode)
+                    else:
+                        char = getattr(node, "term_color", "") + str(node)
+
+                    line.append(char)
+                image.append("".join(line))
+
+        return "\n".join(image)
 
 
 SCREEN = Screen(20, 20)
@@ -276,6 +412,7 @@ def main():
     colors = get_colors()
     config = Configuration()  # TODO
     config["colors"] = colors
+    config["overlay"] = OVERLAY
     SCREEN.configure(term.width, term.height - 1, term, config)
     key = None
     status_message = get_status_message()
