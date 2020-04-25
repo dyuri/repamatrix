@@ -52,40 +52,6 @@ OVERLAY = [
 ]
 
 
-class Overlay:
-
-    def __init__(self, width, height, content):
-        self.width = width
-        self.height = height
-        self.content = content
-        self._cheight = len(content)
-        self._cwidth = len(content[0])
-
-    def __getitem__(self, x):
-        if self.width < self._cwidth or self.height < self._cheight:
-            return [" " for _ in range(self.width)]
-
-        top = int((self.height - self._cheight) / 2)
-        if top <= x < top + self._cheight:
-            before = int((self.width - self._cwidth) / 2)
-            after = self.width - before - self._cwidth
-            return [" " for _ in range(before)] + list(self.content[x - top]) + [" " for _ in range(after)]
-        else:
-            return [" " for _ in range(self.width)]
-
-
-class ColorOverlay(Overlay):
-
-    def __init__(self, width, height, content, term, color):
-        super().__init__(width, height, content)
-        self.term = term
-        self.color = color
-
-    def __getitem__(self, x):
-        line = super().__getitem__(x)
-        return [ch if ch == " " else Node(self.term, {"char": ch, "color": self.color}) for ch in line]
-
-
 class Configuration(dict):
     pass
 
@@ -100,22 +66,25 @@ class Node:
 
     @property
     def term_color(self):
-        if not self._color:
-            self._color = self.term.normal
-        return self.term.color_rgb(*self._color)
+        if self.term:
+            if not self._color:
+                return self.term.normal
+            return self.term.color_rgb(*self._color)
+        return ""
 
     @property
     def color(self):
-        if not self._color:
-            self._color = self.term.normal
         return self._color
 
     @property
     def colored(self):
-        return self.term_color + self._char
+        return self.term_color + str(self)
 
     def __str__(self):
         return self._char
+
+
+EMPTYNODE = Node(None, {})
 
 
 class DynamicNode(Node):
@@ -142,7 +111,7 @@ class DynamicNode(Node):
 
     def __str__(self):
         if self._lifetime is not None and self._lifetime < self._age:
-            return " "
+            return self._char
 
         self._age += 1
         return self._char
@@ -239,7 +208,7 @@ class FadingFlasherSpawner(FadingSpawner):
 class Eraser(Spawner):
 
     def next_node(self):
-        return " "
+        return EMPTYNODE
 
 
 class Column:
@@ -255,7 +224,7 @@ class Column:
         self._spawner_classes = [FadingSpawner, FadingFlasherSpawner]  # Spawner, FadingSpawner, FadingFlasherSpawner, Eraser
 
     def _clear(self):
-        self._nodes = [" " for _ in range(self.height)]
+        self._nodes = [EMPTYNODE for _ in range(self.height)]
 
     def __getitem__(self, y):
         return self._nodes[y]
@@ -283,6 +252,33 @@ class Column:
             self._spawner = self.spawn()
 
 
+class Overlay:
+
+    def __init__(self, term, content):
+        self.term = term
+        self.width = term.width
+        self.height = term.height
+        self.content = content
+        self._cheight = len(content)
+        self._cwidth = len(content[0])
+        self._top = int((self.height - self._cheight) / 2)
+        self._bottom = self._top + self._cheight
+        self._before = int((self.width - self._cwidth) / 2)
+        self._after = self._before + self._cwidth
+        self._content = "".join(content)
+
+    def get_node(self, x, y):
+        if self._top <= y < self._bottom and self._before <= x < self._after:
+            local_y = y - self._top
+            local_x = x - self._before
+            char = self._content[self._cwidth * local_y + local_x]
+            if char == " ":
+                return None
+            return Node(self.term, {"char": char})
+        else:
+            return None
+
+
 class Screen:
 
     def __init__(self, width=80, height=24, term=None, config=None):
@@ -307,6 +303,12 @@ class Screen:
 
     def _init_columns(self):
         return [Column(self.height, self.term, self.config) for _ in range(self.width)]
+
+    @property
+    def overlay(self):
+        if not self._overlay and "overlay" in self.config:
+            self._overlay = Overlay(self.term, self.config["overlay"])
+        return self._overlay
 
     @property
     def colors(self):
@@ -337,37 +339,27 @@ class Screen:
         return False
 
     def get_overlay_node(self, x, y):
-        return " "
+        if self.overlay:
+            return self.overlay.get_node(x, y)
+
+        return None
 
     def __getitem__(self, x):
         return self._columns[x]
 
     def __str__(self):
         image = []
-        for line in self.lines:
-            image.append("".join([getattr(node, "colored", str(node)) for node in line]))
+        for y in range(self.height):
+            line = []
+            for x in range(self.width):
+                node = self[x][y]
+                onode = self.get_overlay_node(x, y)
+                if onode:
+                    line.append(node.term_color + str(onode))
+                else:
+                    line.append(node.colored)
 
-        if False:
-            for y in range(self.height):
-                line = []
-                for x, column in enumerate(self.columns):
-                    node = column[y]
-                    if self.overlay:
-                        overlaynode = self.overlay[y][x]
-                        overlaymode = self.config.get("overlaymode", "both")
-                        if str(overlaynode) == " " or str(node) == " ":
-                            char = getattr(node, "term_color", "") + str(node)
-                        elif overlaymode == "char":
-                            char = getattr(node, "term_color", self.term.normal) + str(overlaynode)
-                        elif overlaymode == "color":
-                            char = getattr(overlaynode, "term_color", "") + str(node)
-                        else:  # both
-                            char = getattr(overlaynode, "term_color", "") + str(overlaynode)
-                    else:
-                        char = getattr(node, "term_color", "") + str(node)
-
-                    line.append(char)
-                image.append("".join(line))
+            image.append("".join(line))
 
         return "\n".join(image)
 
