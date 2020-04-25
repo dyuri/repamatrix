@@ -50,6 +50,19 @@ OVERLAY = [
     "           ▒▒██████                             ",
     "            ▒▒▒▒▒▒                              ",
 ]
+CMAP = {
+    "▒": (32, 32, 64),
+    "█": (64, 64, 128),
+}
+
+
+def add_color(c1, c2):
+    if c1 is None:
+        return c2
+    elif c2 is None:
+        return c1
+
+    return tuple(min(255, v1 + v2) for v1, v2 in zip(c1, c2))
 
 
 class Configuration(dict):
@@ -95,7 +108,7 @@ class DynamicNode(Node):
         self._colors = config.get("colors", get_colors())
         self._color = None
         self._charset = config.get("charset", CHARSET["default"])
-        self._char = random.choice(self._charset)
+        self._char = config.get("char", random.choice(self._charset))
         self._lifetime = config.get("lifetime", None)
         self._age = 0
 
@@ -266,6 +279,7 @@ class Overlay:
         self._before = int((self.width - self._cwidth) / 2)
         self._after = self._before + self._cwidth
         self._content = "".join(content)
+        # TODO convert _content to nodes here
 
     def get_node(self, x, y):
         if self._top <= y < self._bottom and self._before <= x < self._after:
@@ -274,7 +288,7 @@ class Overlay:
             char = self._content[self._cwidth * local_y + local_x]
             if char == " ":
                 return None
-            return Node(self.term, {"char": char})
+            return Node(self.term, {"char": char, "color": CMAP.get(char, (0, 0, 0))})
         else:
             return None
 
@@ -354,8 +368,11 @@ class Screen:
             for x in range(self.width):
                 node = self[x][y]
                 onode = self.get_overlay_node(x, y)
-                if onode:
-                    line.append(node.term_color + str(onode))
+                if onode and onode.color:
+                    color = add_color(node.color, onode.color)
+                    tc = self.term.color_rgb(*color)
+                    line.append(tc + str(node))
+                    # line.append(node.cadd(onode).colored)
                 else:
                     line.append(node.colored)
 
