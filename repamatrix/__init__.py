@@ -38,21 +38,25 @@ SPEED = .1
 UPDATE_TIME = SPEED / 10
 
 OVERLAY = [
-    "     █████                                  ███ ",
-    "    ▒▒███                                  ▒▒▒  ",
-    "  ███████  █████ ████ █████ ████ ████████  ████ ",
-    " ███▒▒███ ▒▒███ ▒███ ▒▒███ ▒███ ▒▒███▒▒███▒▒███ ",
-    "▒███ ▒███  ▒███ ▒███  ▒███ ▒███  ▒███ ▒▒▒  ▒███ ",
-    "▒███ ▒███  ▒███ ▒███  ▒███ ▒███  ▒███      ▒███ ",
-    "▒▒████████ ▒▒███████  ▒▒████████ █████     █████",
-    " ▒▒▒▒▒▒▒▒   ▒▒▒▒▒███   ▒▒▒▒▒▒▒▒ ▒▒▒▒▒     ▒▒▒▒▒ ",
-    "            ███ ▒███                            ",
-    "           ▒▒██████                             ",
-    "            ▒▒▒▒▒▒                              ",
+    "     DDDDD                                  III ",
+    "    ..DDD                                  ...  ",
+    "  DDDDDDD  YYYYY YYYY UUUUU UUUU RRRRRRRR  IIII ",
+    " DDD..DDD ..YYY .YYY ..UUU .UUU ..RRR..RRR..III ",
+    ".DDD .DDD  .YYY .YYY  .UUU .UUU  .RRR ...  .III ",
+    ".DDD .DDD  .YYY .YYY  .UUU .UUU  .RRR      .III ",
+    "..DDDDDDDD ..YYYYYYY  ..UUUUUUUU RRRRR     IIIII",
+    " ........   .....YYY   ........ .....     ..... ",
+    "            YYY .YYY                            ",
+    "           ..YYYYYY                             ",
+    "            ......                              ",
 ]
 CMAP = {
-    "▒": (32, 32, 64),
-    "█": (64, 64, 128),
+    ".": (32, 32, 64),
+    "D": (64, 64, 128),
+    "Y": (64, 64, 128),
+    "U": (64, 64, 128),
+    "R": (64, 64, 128),
+    "I": (64, 64, 128),
 }
 
 
@@ -267,30 +271,65 @@ class Column:
 
 class Overlay:
 
-    def __init__(self, term, content):
+    def __init__(self, term, content, cfg=None):
         self.term = term
         self.width = term.width
         self.height = term.height
         self.content = content
+        self.config = cfg or {}
+
+    def get_node(self, x, y):
+        return EMPTYNODE
+
+    def mix(self, x, y, node):
+        return node.colored
+
+
+class TextOverlay(Overlay):
+
+    def __init__(self, term, content, cfg=None):
+        super().__init__(term, content, cfg)
+
         self._cheight = len(content)
         self._cwidth = len(content[0])
         self._top = int((self.height - self._cheight) / 2)
         self._bottom = self._top + self._cheight
         self._before = int((self.width - self._cwidth) / 2)
         self._after = self._before + self._cwidth
-        self._content = "".join(content)
-        # TODO convert _content to nodes here
+        self.default_color = self.config.get("default_color", (0, 64, 64))
+        self.color_map = self.config.get("color_map", CMAP)
+
+        self._content = self._process_content(content)
+
+    def _get_color(self, ch):
+        return self.color_map.get(ch, self.default_color)
+
+    def _process_content(self, content):
+        return [
+            Node(self.term, {"char": ch, "color": self._get_color(ch)})
+            if ch != " " else None
+            for ch in "".join(content)
+        ]
 
     def get_node(self, x, y):
         if self._top <= y < self._bottom and self._before <= x < self._after:
             local_y = y - self._top
             local_x = x - self._before
-            char = self._content[self._cwidth * local_y + local_x]
-            if char == " ":
-                return None
-            return Node(self.term, {"char": char, "color": CMAP.get(char, (0, 0, 0))})
+            return self._content[self._cwidth * local_y + local_x]
         else:
             return None
+
+    def mix(self, x, y, node):
+        onode = self.get_node(x, y)
+        if onode and onode.color:
+            color = add_color(node.color, onode.color)
+            tc = self.term.color_rgb(*color)
+            nodestr = str(node)
+            if nodestr != " ":
+                return tc + str(onode)
+
+            return " "
+        return node.colored
 
 
 class Screen:
@@ -321,7 +360,7 @@ class Screen:
     @property
     def overlay(self):
         if not self._overlay and "overlay" in self.config:
-            self._overlay = Overlay(self.term, self.config["overlay"])
+            self._overlay = TextOverlay(self.term, self.config["overlay"])
         return self._overlay
 
     @property
@@ -352,11 +391,11 @@ class Screen:
 
         return False
 
-    def get_overlay_node(self, x, y):
+    def mix_overlay(self, x, y, node):
         if self.overlay:
-            return self.overlay.get_node(x, y)
+            return self.overlay.mix(x, y, node)
 
-        return None
+        return node
 
     def __getitem__(self, x):
         return self._columns[x]
@@ -366,15 +405,7 @@ class Screen:
         for y in range(self.height):
             line = []
             for x in range(self.width):
-                node = self[x][y]
-                onode = self.get_overlay_node(x, y)
-                if onode and onode.color:
-                    color = add_color(node.color, onode.color)
-                    tc = self.term.color_rgb(*color)
-                    line.append(tc + str(node))
-                    # line.append(node.cadd(onode).colored)
-                else:
-                    line.append(node.colored)
+                line.append(self.mix_overlay(x, y, self[x][y]))
 
             image.append("".join(line))
 
