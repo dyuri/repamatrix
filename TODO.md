@@ -1,0 +1,9 @@
+- node - background color
+- colors
+  - optional repacolors
+- command line arguments (click)
+- overlays
+  - text - from file
+  - color - from image (optional PIL)
+  - bg - from image (optional PIL)
+  - composite overlays

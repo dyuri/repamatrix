@@ -285,6 +285,46 @@ class Overlay:
         return node.colored
 
 
+class ImageOverlay(Overlay):
+
+    def __init__(self, term, image, cfg=None):
+        try:
+            from PIL import Image
+            self._Image = Image
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError("Install PIL for ImageOverlay support!")
+
+        super().__init__(term, image, cfg)
+        self._load()
+
+    def _load(self):
+        oimg = self._Image.open(self.content)
+        oimg.thumbnail((self.width, 2 * self.height))
+        self.img = oimg.convert("RGB").resize((oimg.width, oimg.height // 2))
+
+    def _get_color(self, x, y):
+        # TODO center
+        if x < self.img.width and y < self.img.height:
+            return self.img.getpixel((x, y))
+        return (0, 0, 0)
+
+    def get_node(self, x, y):
+        color = self._get_color(x, y)
+        return Node(self.term, {"color": color})
+
+    def mix(self, x, y, node):
+        color = self._get_color(x, y)
+        if color != (0, 0, 0):
+            mixcolor = add_color(node.color, color)
+            tc = self.term.color_rgb(*mixcolor)
+            nodestr = str(node)
+            if nodestr != " ":
+                return tc + str(node)
+
+            return " "
+        return node.colored
+
+
 class TextOverlay(Overlay):
 
     def __init__(self, term, content, cfg=None):
@@ -359,8 +399,10 @@ class Screen:
 
     @property
     def overlay(self):
+        # if not self._overlay and "overlay" in self.config:
+        #     self._overlay = TextOverlay(self.term, self.config["overlay"])
         if not self._overlay and "overlay" in self.config:
-            self._overlay = TextOverlay(self.term, self.config["overlay"])
+            self._overlay = ImageOverlay(self.term, self.config["overlay"])
         return self._overlay
 
     @property
@@ -401,11 +443,15 @@ class Screen:
         return self._columns[x]
 
     def __str__(self):
+        return self.display()
+
+    def display(self, dx=0):
         image = []
         for y in range(self.height):
             line = []
             for x in range(self.width):
-                line.append(self.mix_overlay(x, y, self[x][y]))
+                mx = (x - dx) % self.term.width
+                line.append(self.mix_overlay(x, y, self[mx][y]))
 
             image.append("".join(line))
 
@@ -452,20 +498,28 @@ def main():
     colors = get_colors()
     config = Configuration()  # TODO
     config["colors"] = colors
-    config["overlay"] = OVERLAY
+    # config["overlay"] = OVERLAY
+    config["overlay"] = "etc/punisher.jpg"
     SCREEN.configure(term.width, term.height - 1, term, config)
     key = None
     status_message = get_status_message()
 
     signal.signal(signal.SIGWINCH, resize_handler(term))
 
+    dx = 0
     with term.fullscreen(), term.cbreak(), term.hidden_cursor():
         try:
             while key is None or key.code != term.KEY_ESCAPE:
                 if SCREEN.step():
-                    print(term.move_xy(0, 0) + str(SCREEN), end="")
+                    print(term.move_xy(0, 0) + SCREEN.display(dx), end="")
                 status(term, colors, status_message)
                 key = term.inkey(timeout=UPDATE_TIME, esc_delay=UPDATE_TIME / 10)
+
+                if key.code == term.KEY_LEFT:
+                    dx = (dx - 1) % term.width
+                elif key.code == term.KEY_RIGHT:
+                    dx = (dx + 1) % term.width
+
                 time.sleep(UPDATE_TIME)
         except KeyboardInterrupt:
             pass
