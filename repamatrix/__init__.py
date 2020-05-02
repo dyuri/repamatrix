@@ -79,19 +79,31 @@ class Node:
         self.term = term
         self.config = config
         self._color = config.get("color", None)
+        self._bgcolor = config.get("bgcolor", None)
         self._char = config.get("char", " ")
+        self._term_color = ""
 
     @property
     def term_color(self):
         if self.term:
-            if not self._color:
-                return self.term.normal
-            return self.term.color_rgb(*self._color)
-        return ""
+            if not self._term_color:
+                if not self._color and not self._bgcolor:
+                    self._term_color = self.term.normal
+                else:
+                    tc = ""
+                    if self._bgcolor:
+                        tc += self.term.on_color_rgb(*self._bgcolor)
+                    if self._color:
+                        tc += self.term.color_rgb(*self._color)
+        return self._term_color
 
     @property
     def color(self):
         return self._color
+
+    @property
+    def bgcolor(self):
+        return self._bgcolor
 
     @property
     def colored(self):
@@ -295,34 +307,49 @@ class ImageOverlay(Overlay):
             raise ModuleNotFoundError("Install PIL for ImageOverlay support!")
 
         super().__init__(term, image, cfg)
+        self._multiply = cfg.get("multiply", None)
+        self._prop = cfg.get("prop", "color")
         self._load()
 
     def _load(self):
         oimg = self._Image.open(self.content)
         oimg.thumbnail((self.width, 2 * self.height))
         self.img = oimg.convert("RGB").resize((oimg.width, oimg.height // 2))
+        # TODO ? img => array
+        self._top = int((self.height - (oimg.height // 2)) / 2)
+        self._before = int((self.width - oimg.width) / 2)
 
     def _get_color(self, x, y):
-        # TODO center
-        if x < self.img.width and y < self.img.height:
-            return self.img.getpixel((x, y))
+        _x = x - self._before
+        _y = y - self._top
+        if 0 <= _x < self.img.width and 0 <= _y < self.img.height:
+            color = self.img.getpixel((_x, _y))
+            if self._multiply is not None:
+                color = tuple(int(self._multiply * component) for component in color)
+            return color
         return (0, 0, 0)
 
     def get_node(self, x, y):
         color = self._get_color(x, y)
-        return Node(self.term, {"color": color})
+        cfg = {}
+        cfg[self._prop] = color
+        return Node(self.term, cfg)
 
     def mix(self, x, y, node):
         color = self._get_color(x, y)
         if color != (0, 0, 0):
-            mixcolor = add_color(node.color, color)
-            tc = self.term.color_rgb(*mixcolor)
-            nodestr = str(node)
-            if nodestr != " ":
-                return tc + str(node)
+            if self._prop == "color":
+                mixcolor = add_color(node.color, color)
+                tc = self.term.color_rgb(*mixcolor)
+                nodestr = str(node)
+                if nodestr != " ":
+                    return tc + str(node)
 
-            return " "
-        return node.colored
+                return " "
+            elif self._prop == "bgcolor":
+                return self.term.on_color_rgb(*color) + node.colored
+
+        return self.term.normal + node.colored
 
 
 class TextOverlay(Overlay):
@@ -402,7 +429,7 @@ class Screen:
         # if not self._overlay and "overlay" in self.config:
         #     self._overlay = TextOverlay(self.term, self.config["overlay"])
         if not self._overlay and "overlay" in self.config:
-            self._overlay = ImageOverlay(self.term, self.config["overlay"])
+            self._overlay = ImageOverlay(self.term, self.config["overlay"], {"multiply": .75, "prop": "color"})
         return self._overlay
 
     @property
