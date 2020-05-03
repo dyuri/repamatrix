@@ -305,6 +305,7 @@ class ImageOverlay(Overlay):
             self._Image = Image
         except ModuleNotFoundError:
             raise ModuleNotFoundError("Install PIL for ImageOverlay support!")
+        cfg = cfg or {}
 
         super().__init__(term, image, cfg)
         self._multiply = cfg.get("multiply", None)
@@ -313,9 +314,10 @@ class ImageOverlay(Overlay):
 
     def _load(self):
         oimg = self._Image.open(self.content)
+        oimg = oimg.convert("RGB")
         oimg.thumbnail((self.width, 2 * self.height))
-        self.img = oimg.convert("RGB").resize((oimg.width, oimg.height // 2))
-        # TODO ? img => array
+        self.img = oimg.resize((oimg.width, oimg.height // 2))
+        self._imgdata = list(oimg.getdata())
         self._top = int((self.height - (oimg.height // 2)) / 2)
         self._before = int((self.width - oimg.width) / 2)
 
@@ -323,7 +325,9 @@ class ImageOverlay(Overlay):
         _x = x - self._before
         _y = y - self._top
         if 0 <= _x < self.img.width and 0 <= _y < self.img.height:
-            color = self.img.getpixel((_x, _y))
+            # color = self.img.getpixel((_x, _y))
+            idx = _x + 2 * _y * self.img.width
+            color = self._imgdata[idx]
             if self._multiply is not None:
                 color = tuple(int(self._multiply * component) for component in color)
             return color
