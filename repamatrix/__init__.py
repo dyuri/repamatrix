@@ -19,8 +19,18 @@ CHARSET = {
 CHARSET["default"] = CHARSET["japan"] + CHARSET["greek"]
 
 
+def make_colors(base, n=7):
+    colors = []
+    for i in range(n):
+        color = tuple(cv // n * i for cv in base)
+        colors.append(color)
+
+    colors.append((255, 255, 255))
+    return colors
+
+
 PALETTE = {
-    "green": [
+    "default": [
         (9, 37, 0),
         (14, 75, 0),
         (28, 109, 0),
@@ -29,10 +39,18 @@ PALETTE = {
         (55, 218, 0),
         (64, 255, 0),
         (228, 255, 219),
-    ]
+    ],
+    "bw": make_colors((255, 255, 255)),
+    "red" : make_colors((255, 0, 0)),
+    "green" : make_colors((0, 255, 0)),
+    "blue" : make_colors((0, 0, 255)),
+    "cyan" : make_colors((0, 255, 255)),
+    "magenta" : make_colors((255, 0, 255)),
+    "yellow" : make_colors((255, 255, 0)),
+    "purple" : make_colors((128, 0, 255)),
 }
 
-PALETTE["default"] = PALETTE["green"]
+PALETTE["default"] = PALETTE["cyan"]
 
 SPEED = .1
 UPDATE_TIME = SPEED / 10
