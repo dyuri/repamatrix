@@ -53,7 +53,6 @@ PALETTE = {
 PALETTE["default"] = PALETTE["cyan"]
 
 SPEED = .1
-UPDATE_TIME = SPEED / 10
 
 OVERLAY = [
     "     DDDDD                                  III ",
@@ -274,10 +273,13 @@ class Column:
         self._nodes = [EMPTYNODE for _ in range(self.height)]
 
     def __getitem__(self, y):
-        return self._nodes[y]
+        if len(self._nodes) > y:
+            return self._nodes[y]
+        return EMPTYNODE
 
     def __setitem__(self, y, node):
-        self._nodes[y] = node
+        if len(self._nodes) > y:
+            self._nodes[y] = node
 
     def get_spawner(self):
         return random.choice(self._spawner_classes)
@@ -423,28 +425,53 @@ class TextOverlay(Overlay):
 
 class Screen:
 
-    def __init__(self, width=80, height=24, term=None, config=None):
-        self.term = None
-        self.config = {}
-        self.configure(width, height, term, config)
+    def __init__(self, config=None):
+        self.term = Terminal()
+        self.config = config or {}
 
-    def configure(self, width=None, height=None, term=None, config=None):
-        if term is not None:
-            self.term = term
-        if width is not None:
-            self.width = width
-        if height is not None:
-            self.height = height
-        if config is not None:
-            self.config = config
+        self.step_time = config.get("speed", SPEED)
+        self.status_message = config.get("status_message", "M4TR1X")
 
-        self.step_time = SPEED  # TODO
+        self._configure()
+
+        signal.signal(signal.SIGWINCH, self._resize_handler())
+
+    def _configure(self):
+        self.width = self.config.get("width", self.term.width)
+        self.height = self.config.get("height", self.term.height - 1)
+
         self._last_step = 0
         self._overlay = None
         self._columns = self._init_columns()
 
     def _init_columns(self):
         return [Column(self.height, self.term, self.config) for _ in range(self.width)]
+
+    def _resize_handler(self):
+        def on_resize(*_):
+            print(self.term.clear)
+            self._configure()
+        return on_resize
+
+    def status(self, message=None):
+        message = message or self.status_message
+        left_txt = message
+        now = datetime.datetime.now().time()
+        right_txt = now.strftime("%H:%M:%S")
+
+        term = self.term
+        colors = self.colors
+
+        msg = (
+            term.normal
+            + term.on_color_rgb(*colors[0])
+            + term.color_rgb(*colors[-1])
+            + term.clear_eol
+            + left_txt
+            + term.rjust(right_txt, term.width - len(left_txt))
+        )
+        with term.location(0, term.height - 1):
+            print(msg, end="")
 
     @property
     def overlay(self):
@@ -494,81 +521,66 @@ class Screen:
     def __str__(self):
         return self.display()
 
-    def display(self, dx=0):
+    def _display(self, dx=0):
         image = []
         for y in range(self.height):
             line = []
             for x in range(self.width):
                 mx = (x - dx) % self.term.width
-                line.append(self.mix_overlay(x, y, self[mx][y]))
+                try:
+                    line.append(self.mix_overlay(x, y, self[mx][y]))
+                except Exception:
+                    pass
 
             image.append("".join(line))
 
         return "\n".join(image)
 
-
-SCREEN = Screen(20, 20)
+    def display(self, dx=0):
+        print(self.term.move_xy(0, 0) + self._display(dx), end="")
+        self.status()
 
 
 def get_colors(palette="default"):
     return PALETTE[palette]
 
 
-def get_status_message():
+def get_user_hostname():
     return getpass.getuser() + "@" + platform.node()
 
 
-def status(term, colors, message):
-    left_txt = message
-    now = datetime.datetime.now().time()
-    right_txt = now.strftime("%H:%M:%S")
-
-    msg = (
-        term.normal
-        + term.on_color_rgb(*colors[0])
-        + term.color_rgb(*colors[-1])
-        + term.clear_eol
-        + left_txt
-        + term.rjust(right_txt, term.width - len(left_txt))
-    )
-    with term.location(0, term.height - 1):
-        print(msg, end="")
-
-
-def resize_handler(term):
-    def on_resize(*_):
-        print(term.clear)
-        SCREEN.configure(term.width, term.height - 1)
-    return on_resize
-
-
-def main():
+def matrix(config):
     term = Terminal()
-    colors = get_colors()
-    config = Configuration()  # TODO
-    config["colors"] = colors
-    # config["overlay"] = OVERLAY
-    config["overlay"] = "etc/punisher.jpg"
-    SCREEN.configure(term.width, term.height - 1, term, config)
+    screen = Screen(config)
+
+    update_time = config.get("update_time", config.get(SPEED, .1) / 10)
+
     key = None
-    status_message = get_status_message()
-
-    signal.signal(signal.SIGWINCH, resize_handler(term))
-
     dx = 0
     with term.fullscreen(), term.cbreak(), term.hidden_cursor():
         try:
             while key is None or key.code != term.KEY_ESCAPE:
-                if SCREEN.step():
-                    print(term.move_xy(0, 0) + SCREEN.display(dx), end="")
-                status(term, colors, status_message)
-                key = term.inkey(timeout=UPDATE_TIME, esc_delay=UPDATE_TIME / 10)
+                if screen.step():
+                    screen.display(dx)
+                key = term.inkey(timeout=update_time, esc_delay=update_time / 10)
 
                 if key.code == term.KEY_LEFT:
                     dx = (dx - 1) % term.width
                 elif key.code == term.KEY_RIGHT:
                     dx = (dx + 1) % term.width
 
-                time.sleep(UPDATE_TIME)
+                time.sleep(update_time)
         except KeyboardInterrupt:
             pass
+
+
+def main():
+    config = Configuration()  # TODO
+    config["colors"] = get_colors()
+    # config["overlay"] = OVERLAY
+    config["overlay"] = "etc/punisher.jpg"
+    config["status_message"] = get_user_hostname()
+    config["speed"] = SPEED
+
+    matrix(config)
+
