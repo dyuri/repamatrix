@@ -303,7 +303,7 @@ class Column:
 
 class Overlay:
 
-    def __init__(self, term, content, cfg=None):
+    def __init__(self, term, content=None, cfg=None):
         self.term = term
         self.width = term.width
         self.height = term.height
@@ -432,6 +432,8 @@ class Screen:
         self.step_time = config.get("speed", SPEED)
         self.status_message = config.get("status_message", "M4TR1X")
 
+        self._notes = []
+
         self._configure()
 
         signal.signal(signal.SIGWINCH, self._resize_handler())
@@ -455,7 +457,7 @@ class Screen:
 
     def status(self, message=None):
         message = message or self.status_message
-        left_txt = message
+        left_txt = self._notes[-1] if len(self._notes) else message
         now = datetime.datetime.now().time()
         right_txt = now.strftime("%H:%M:%S")
 
@@ -475,10 +477,18 @@ class Screen:
 
     @property
     def overlay(self):
-        # if not self._overlay and "overlay" in self.config:
-        #     self._overlay = TextOverlay(self.term, self.config["overlay"])
-        if not self._overlay and "overlay" in self.config:
-            self._overlay = ImageOverlay(self.term, self.config["overlay"], {"multiply": .75, "prop": "color"})
+        if not self._overlay:
+            if "overlay_image" in self.config:
+                try:
+                    self._overlay = ImageOverlay(self.term, self.config["overlay_image"], {"multiply": .75, "prop": "color"})
+                except:
+                    self._notes.append("ImageOverlay could not be initialized, do you have pillow installed?")
+            elif "overlay_text" in self.config:
+                self._overlay = TextOverlay(self.term, self.config["overlay_text"])
+
+            if not self._overlay:
+                self._overlay = Overlay(self.term)
+
         return self._overlay
 
     @property
@@ -576,9 +586,12 @@ def matrix(config):
 
 def main():
     config = Configuration()  # TODO
-    config["colors"] = get_colors()
-    # config["overlay"] = OVERLAY
-    config["overlay"] = "etc/punisher.jpg"
+    config["colors"] = get_colors("green")
+
+    # TOOD
+    config["overlay_image"] = "etc/punisher.jpg"
+    # config["overlay_text"] = OVERLAY
+
     config["status_message"] = get_user_hostname()
     config["speed"] = SPEED
 
