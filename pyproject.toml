@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "repamatrix"
-version = "0.0.1"
+version = "0.0.2"
 description = "cmatrix like terminal 'screen saver'"
 authors = ["Gyuri Horak <dyuri@horak.hu>"]
 repository = "https://github.com/dyuri/repamatrix"

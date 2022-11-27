@@ -16,3 +16,9 @@ $ pip install repamatrix
 $ repamatrix
 ```
 
+### Webcam support
+
+```
+$ webcammatrix
+```
+
