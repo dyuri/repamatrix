@@ -19,7 +19,8 @@ class WebcamOverlay(Overlay):
         self._prop = cfg.get("prop", "color")
         self._selfie_segmentation = selfie_segmentation
         self._bgcolor = cfg.get("bgcolor", None)
-        self._shade = cfg.get("shade", None)
+        self._shade = cfg.get("shade", (64, 255, 0))
+        self._shade_cutoff = cfg.get("shade_cutoff", 200)
 
     def _load(self, image=None):
         image = cv2.cvtColor(cv2.flip(image, 1), cv2.COLOR_BGR2RGB)
@@ -32,12 +33,17 @@ class WebcamOverlay(Overlay):
         bg_image = np.zeros(image.shape, dtype=np.uint8)
         output_image = np.where(condition, image, bg_image)
         output_image = cv2.resize(output_image, (self.width, self.height))
+        output_image = cv2.cvtColor(output_image, cv2.COLOR_BGR2GRAY)
 
         self.img = output_image
 
 
     def _get_color(self, x, y):
-        color = tuple(self.img[y, x][::-1])
+        value = self.img[y, x]
+        if value < self._shade_cutoff:
+            color = tuple(int(value/self._shade_cutoff * c) for c in self._shade)
+        else:
+            color = tuple(int(c + (255-c) * (value-self._shade_cutoff)/(255-self._shade_cutoff)) for c in self._shade)
         if self._multiply is not None:
             color = tuple(int(self._multiply * component) for component in color)
         return color
