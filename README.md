@@ -22,4 +22,4 @@ $ repamatrix
 $ webcammatrix
 ```
 
-![demo](demo.mp4)
+![](demo.mp4)
