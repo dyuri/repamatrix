@@ -2,7 +2,7 @@
 
 `cmatrix` like terminal *screen saver*
 
-![screenshot](./repamatrix.png)
+![screenshot](repamatrix.png)
 
 ## Install
 
@@ -22,3 +22,4 @@ $ repamatrix
 $ webcammatrix
 ```
 
+![demo](demo.mp4)
